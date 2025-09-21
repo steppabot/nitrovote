@@ -48,9 +48,10 @@ LIMIT 3;
 SQL_TOP10_MONTH = """
 SELECT
   user_id,
-  COUNT(*)::int      AS votes,
-  MIN(voted_at)      AS first_vote_at,  -- earliest vote in the window
-  MIN(id)            AS first_vote_id   -- monotonic tiebreaker if times match
+  COUNT(*)::int AS votes,
+  MIN(voted_at) AS first_vote_at,   -- earliest vote in the window
+  MIN(id)       AS first_vote_id,   -- strict tiebreaker if timestamps collide
+  MAX(voted_at) AS last_vote_at
 FROM vote_events
 WHERE voted_at >= %s
   AND voted_at <  %s
@@ -193,7 +194,15 @@ async def voteleaders(inter: discord.Interaction):
     start_utc, end_utc = ct_month_bounds_utc()
     with get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute(SQL_TOP10_MONTH, (start_utc, end_utc))
-        rows = cur.fetchall()
+        rows = cur.fetchall() or []
+
+    # Extra safety: re-sort exactly the way we want
+    rows.sort(key=lambda r: (
+        -(r["votes"] or 0),
+         r["first_vote_at"],
+         r.get("first_vote_id") or 0,
+         r["user_id"],
+    ))
 
     if not rows:
         e = brand_embed("Monthly Voting Leaderboard", "No votes recorded this month yet.", tone="blue")
@@ -210,19 +219,8 @@ async def voteleaders(inter: discord.Interaction):
         except discord.NotFound:
             name = f"User {r['user_id']}"
 
-        # psycopg2 returns a datetime here if voted_at is TIMESTAMPTZ (recommended)
-        fv = r.get("first_vote_at")
-        if fv is not None:
-            try:
-                first_ct = fv.astimezone(CT).strftime("%b %d, %I:%M %p")
-                lines.append(f"{medal} **{name}** — **{r['votes']}** _(first vote {first_ct} CT)_")
-            except Exception:
-                lines.append(f"{medal} **{name}** — **{r['votes']}**")
-        else:
-            # last-ditch fallback; also prints available keys once so you can see what's coming back
-            if rows:
-                print("[voteleaders] columns:", list(rows[0].keys()))
-            lines.append(f"{medal} **{name}** — **{r['votes']}**")
+        first_ct = r["first_vote_at"].astimezone(CT).strftime("%b %d, %I:%M %p")
+        lines.append(f"{medal} **{name}** — **{r['votes']}** _(first vote {first_ct} CT)_")
 
     e = brand_embed("Monthly Voting Leaderboard", "\n".join(lines), tone="blue")
     await inter.response.send_message(embed=e)
