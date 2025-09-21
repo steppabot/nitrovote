@@ -48,16 +48,19 @@ LIMIT 3;
 SQL_TOP10_MONTH = """
 SELECT
   user_id,
-  COUNT(*)::int AS votes
+  COUNT(*)::int AS votes,
+  MIN(voted_at) AS first_vote_at,  -- used only for tie-break & (optional) display
+  MIN(id)       AS first_vote_id   -- strict fallback if timestamps collide
 FROM vote_events
 WHERE voted_at >= %s
   AND voted_at <  %s
 GROUP BY user_id
 ORDER BY
-  COUNT(*) DESC,       -- highest votes first
-  MIN(voted_at) ASC,   -- earliest vote in the window wins the tie
-  MIN(id) ASC,         -- deterministic backup if timestamps ever collide
-  user_id;
+  votes DESC,          -- higher totals first
+  first_vote_at ASC,   -- among equal totals, whoever voted first
+  first_vote_id ASC,   -- deterministic fallback
+  user_id ASC
+LIMIT 10;
 """
 
 # ---- Month bounds: previous month in CT, as UTC ----
@@ -197,24 +200,26 @@ async def voteleaders(inter: discord.Interaction):
         rows = cur.fetchall() or []
 
     if not rows:
-        e = brand_embed("Monthly Voting Leaderboard", "No votes recorded this month yet.", tone="blue")
-        await inter.response.send_message(embed=e)
+        await inter.response.send_message(
+            embed=brand_embed("Monthly Voting Leaderboard", "No votes recorded this month yet.", tone="blue")
+        )
         return
 
     medals = ["🥇", "🥈", "🥉"]
     lines = []
-    for i, r in enumerate(rows[:10], start=1):
-        medal = medals[i-1] if i <= 3 else f"#{i}"
+    for i, r in enumerate(rows, start=1):  # already ordered by SQL
+        tag = medals[i-1] if i <= 3 else f"#{i}"
         try:
             user = await client.fetch_user(r["user_id"])
             name = user.name
         except discord.NotFound:
             name = f"User {r['user_id']}"
-        lines.append(f"{medal} **{name}** — **{r['votes']}**")
 
-    e = brand_embed("Monthly Voting Leaderboard", "\n".join(lines), tone="blue")
-    await inter.response.send_message(embed=e)
+        # optional: show the tie-break moment so you can verify order at a glance
+        first_ct = r["first_vote_at"].astimezone(CT).strftime("%b %d, %I:%M %p")
+        lines.append(f"{tag} **{name}** — **{r['votes']}** _(first vote {first_ct} CT)_")
 
+    await inter.response.send_message(embed=brand_embed("Monthly Voting Leaderboard", "\n".join(lines), tone="blue")
 # /rules — reward rules
 @tree.command(name="rules", description="Official NitroVote rules and eligibility.")
 async def rules(inter: discord.Interaction):
