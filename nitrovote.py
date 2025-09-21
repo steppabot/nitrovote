@@ -45,6 +45,23 @@ WHERE votes >= %s
 ORDER BY votes DESC, last_vote_at ASC, user_id
 LIMIT 3;
 """
+SQL_TOP10_MONTH = """
+WITH totals AS (
+  SELECT
+    user_id,
+    COUNT(*)::int        AS votes,
+    MAX(voted_at)        AS last_vote_at,   -- when they reached their current total
+    MIN(voted_at)        AS first_vote_at   -- when they first voted this month (for reference)
+  FROM vote_events
+  WHERE voted_at >= %s
+    AND voted_at <  %s
+  GROUP BY user_id
+)
+SELECT user_id, votes, last_vote_at, first_vote_at
+FROM totals
+ORDER BY votes DESC, last_vote_at ASC, user_id
+LIMIT 10;
+"""
 
 # ---- Month bounds: previous month in CT, as UTC ----
 def prev_month_ct_bounds_utc(now_ct: datetime | None = None):
@@ -190,19 +207,18 @@ async def voteleaders(inter: discord.Interaction):
         return
 
     medals = ["🥇", "🥈", "🥉"]
-
     lines = []
     for i, r in enumerate(rows, start=1):
         medal = medals[i-1] if i <= 3 else f"#{i}"
-
-        # fetch the user object to get their global username
         try:
             user = await client.fetch_user(r["user_id"])
-            name = user.name  # global username only (no discriminator, no mention)
+            name = user.name
         except discord.NotFound:
-            name = f"User {r['user_id']}"  # fallback if the user can’t be fetched
+            name = f"User {r['user_id']}"
 
-        lines.append(f"{medal} **{name}** — **{r['votes']}**")
+        # optional: show tie-break moment in CT (comment this line out if you don't want the time)
+        reached_ct = datetime.fromisoformat(str(r["last_vote_at"])).astimezone(CT).strftime("%b %d, %I:%M %p")
+        lines.append(f"{medal} **{name}** — **{r['votes']}** _(reached at {reached_ct} CT)_")
 
     e = brand_embed("Monthly Voting Leaderboard", "\n".join(lines), tone="blue")
     await inter.response.send_message(embed=e)
