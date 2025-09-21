@@ -30,21 +30,35 @@ COLORS = {
 }
 
 MIN_VOTES_TO_WIN = 30
+
 SQL_TOP3_PREV_MONTH = """
-WITH totals AS (
-  SELECT user_id,
-         COUNT(*)::int AS votes,
-         MAX(voted_at) AS last_vote_at  -- when they reached their final total
+WITH month_rows AS (
+  SELECT
+    id,
+    user_id,
+    voted_at,
+    ROW_NUMBER() OVER (ORDER BY voted_at ASC, id ASC) AS rn  -- exact same ordering as your diagnostic
   FROM vote_events
   WHERE voted_at >= %s AND voted_at < %s
+),
+totals AS (
+  SELECT
+    user_id,
+    COUNT(*)::int AS votes,
+    MAX(rn)       AS finish_rn  -- this 'rn' is the user's last vote; smaller = reached total earlier
+  FROM month_rows
   GROUP BY user_id
 )
-SELECT user_id, votes, last_vote_at
+SELECT user_id, votes
 FROM totals
 WHERE votes >= %s
-ORDER BY votes DESC, last_vote_at ASC, user_id
+ORDER BY
+  votes DESC,      -- highest totals first
+  finish_rn ASC,   -- tie: whoever reached that total first in the stream
+  user_id ASC
 LIMIT 3;
 """
+
 SQL_EVENTS_FOR_MONTH = """
 SELECT id, user_id, voted_at
 FROM vote_events
