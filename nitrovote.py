@@ -183,17 +183,26 @@ async def voteleaders(inter: discord.Interaction):
         rows = cur.fetchall()
 
     if not rows:
-        e = brand_embed("Monthly Voting Leaderboard", "No votes recorded this month yet.", tone="blue")
+        e = brand_embed("Monthly Voting Leaderboard",
+                        "No votes recorded this month yet.",
+                        tone="blue")
         await inter.response.send_message(embed=e)
         return
 
     medals = ["🥇", "🥈", "🥉"]
-    tones  = ["gold", "purple", "cyan"]
 
     lines = []
     for i, r in enumerate(rows, start=1):
         medal = medals[i-1] if i <= 3 else f"#{i}"
-        lines.append(f"{medal} <@{r['user_id']}> — **{r['votes']}**")
+
+        # fetch the user object to get their global username
+        try:
+            user = await client.fetch_user(r["user_id"])
+            name = user.name  # global username only (no discriminator, no mention)
+        except discord.NotFound:
+            name = f"User {r['user_id']}"  # fallback if the user can’t be fetched
+
+        lines.append(f"{medal} **{name}** — **{r['votes']}**")
 
     e = brand_embed("Monthly Voting Leaderboard", "\n".join(lines), tone="blue")
     await inter.response.send_message(embed=e)
