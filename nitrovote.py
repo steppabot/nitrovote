@@ -48,17 +48,15 @@ LIMIT 3;
 SQL_TOP10_MONTH = """
 SELECT
   user_id,
-  COUNT(*)::int AS votes,
-  MIN(voted_at) AS tie_voted_at,  -- earliest vote in the window (tiebreaker)
-  MIN(id)       AS tie_id         -- strict fallback if timestamps collide
+  COUNT(*)::int AS votes
 FROM vote_events
 WHERE voted_at >= %s
   AND voted_at <  %s
 GROUP BY user_id
 ORDER BY
-  votes DESC,          -- more votes first
-  tie_voted_at ASC,    -- if tied, whoever voted first
-  tie_id ASC,          -- fallback to insertion order
+  COUNT(*) DESC,     -- most votes first
+  MIN(voted_at) ASC, -- if tied, whoever voted first
+  MIN(id) ASC,       -- strict fallback if timestamps collide
   user_id ASC
 LIMIT 10;
 """
@@ -206,13 +204,9 @@ async def voteleaders(inter: discord.Interaction):
         )
         return
 
-    # optional: one-line sanity log so you can compare to your raw query
-    for r in rows:
-        print("[leaders]", r["user_id"], r["votes"], r["tie_voted_at"], r["tie_id"])
-
     medals = ["🥇", "🥈", "🥉"]
     lines = []
-    for i, r in enumerate(rows, start=1):  # already ordered exactly how we want
+    for i, r in enumerate(rows, start=1):  # already ordered by SQL exactly as required
         tag = medals[i-1] if i <= 3 else f"#{i}"
         try:
             user = await client.fetch_user(r["user_id"])
@@ -222,7 +216,6 @@ async def voteleaders(inter: discord.Interaction):
         lines.append(f"{tag} **{name}** — **{r['votes']}**")
 
     await inter.response.send_message(embed=brand_embed("Monthly Voting Leaderboard", "\n".join(lines), tone="blue"))
-
 
 # /rules — reward rules
 @tree.command(name="rules", description="Official NitroVote rules and eligibility.")
