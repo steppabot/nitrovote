@@ -49,9 +49,9 @@ SQL_TOP10_MONTH = """
 WITH totals AS (
   SELECT
     user_id,
-    COUNT(*)::int        AS votes,
-    MAX(voted_at)        AS last_vote_at,   -- when they reached their current total
-    MIN(voted_at)        AS first_vote_at   -- when they first voted this month (for reference)
+    COUNT(*)::int AS votes,
+    MAX(voted_at) AS last_vote_at,   -- when they reached their current total
+    MIN(voted_at) AS first_vote_at   -- optional: for reference/display
   FROM vote_events
   WHERE voted_at >= %s
     AND voted_at <  %s
@@ -216,9 +216,12 @@ async def voteleaders(inter: discord.Interaction):
         except discord.NotFound:
             name = f"User {r['user_id']}"
 
-        # optional: show tie-break moment in CT (comment this line out if you don't want the time)
-        reached_ct = datetime.fromisoformat(str(r["last_vote_at"])).astimezone(CT).strftime("%b %d, %I:%M %p")
-        lines.append(f"{medal} **{name}** — **{r['votes']}** _(reached at {reached_ct} CT)_")
+        # r["last_vote_at"] should already be a tz-aware datetime if your column is timestamptz
+        try:
+            reached_ct = r["last_vote_at"].astimezone(CT).strftime("%b %d, %I:%M %p")
+            lines.append(f"{medal} **{name}** — **{r['votes']}** _(reached at {reached_ct} CT)_")
+        except Exception:
+            lines.append(f"{medal} **{name}** — **{r['votes']}**")
 
     e = brand_embed("Monthly Voting Leaderboard", "\n".join(lines), tone="blue")
     await inter.response.send_message(embed=e)
