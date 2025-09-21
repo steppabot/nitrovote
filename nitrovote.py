@@ -50,16 +50,16 @@ WITH totals AS (
   SELECT
     user_id,
     COUNT(*)::int AS votes,
-    MAX(voted_at) AS last_vote_at,   -- when they reached their current total
-    MIN(voted_at) AS first_vote_at   -- optional: for reference/display
+    MIN(voted_at) AS first_vote_at,  -- earliest vote this month
+    MAX(voted_at) AS last_vote_at    -- when they reached their current total
   FROM vote_events
   WHERE voted_at >= %s
     AND voted_at <  %s
   GROUP BY user_id
 )
-SELECT user_id, votes, last_vote_at, first_vote_at
+SELECT user_id, votes, first_vote_at, last_vote_at
 FROM totals
-ORDER BY votes DESC, last_vote_at ASC, user_id
+ORDER BY votes DESC, first_vote_at ASC, user_id
 LIMIT 10;
 """
 
