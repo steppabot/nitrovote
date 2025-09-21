@@ -45,35 +45,13 @@ WHERE votes >= %s
 ORDER BY votes DESC, last_vote_at ASC, user_id
 LIMIT 3;
 """
-SQL_TOP10_MONTH = """
-WITH month AS (
-  SELECT id, user_id, voted_at
-  FROM vote_events
-  WHERE voted_at >= %s AND voted_at < %s
-),
-first_event AS (
-  -- EXACTLY your raw query ordering to pick each user's first event
-  SELECT DISTINCT ON (user_id)
-         user_id, voted_at, id
-  FROM month
-  ORDER BY user_id, voted_at ASC, id ASC
-),
-totals AS (
-  SELECT user_id, COUNT(*)::int AS votes
-  FROM month
-  GROUP BY user_id
-)
-SELECT t.user_id, t.votes
-FROM totals t
-JOIN first_event fe USING (user_id)
-ORDER BY
-  t.votes DESC,     -- most votes first
-  fe.voted_at ASC,  -- tie-break: the user's earliest vote time
-  fe.id ASC,        -- strict fallback if two earliest times are equal
-  t.user_id ASC
-LIMIT 10;
+SQL_EVENTS_FOR_MONTH = """
+SELECT id, user_id, voted_at
+FROM vote_events
+WHERE voted_at >= %s
+  AND voted_at <  %s
+ORDER BY voted_at ASC, id ASC
 """
-
 
 # ---- Month bounds: previous month in CT, as UTC ----
 def prev_month_ct_bounds_utc(now_ct: datetime | None = None):
@@ -207,28 +185,50 @@ async def myvotes(inter: discord.Interaction):
 @tree.command(name="voteleaders", description="Show the top 10 voters this month (global).")
 async def voteleaders(inter: discord.Interaction):
     start_utc, end_utc = ct_month_bounds_utc()
-    with get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
-        cur.execute(SQL_TOP10_MONTH, (start_utc, end_utc))
-        rows = cur.fetchall() or []
 
-    if not rows:
+    with get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+        # 1) Get the raw stream in the SAME order as your manual query
+        cur.execute(SQL_EVENTS_FOR_MONTH, (start_utc, end_utc))
+        events = cur.fetchall() or []
+
+    if not events:
         await inter.response.send_message(
             embed=brand_embed("Monthly Voting Leaderboard", "No votes recorded this month yet.", tone="blue")
         )
         return
 
+    # 2) Build vote counts and each user's first appearance index in the stream
+    counts: dict[int, int] = {}
+    first_idx: dict[int, int] = {}
+    for idx, ev in enumerate(events):
+        uid = ev["user_id"]
+        counts[uid] = counts.get(uid, 0) + 1
+        if uid not in first_idx:
+            first_idx[uid] = idx  # EXACT tie-break key: order from (voted_at, id)
+
+    # 3) Order users: most votes first, then earliest first_idx, then user_id
+    ordered_users = sorted(counts.keys(), key=lambda uid: (-counts[uid], first_idx[uid], uid))
+    top10 = ordered_users[:10]
+
+    # (Optional: quick sanity log so you can compare to your raw list)
+    for uid in top10:
+        print("[leaders]", uid, "votes=", counts[uid], "first_idx=", first_idx[uid])
+
+    # 4) Render the embed in that order
     medals = ["🥇", "🥈", "🥉"]
     lines = []
-    for i, r in enumerate(rows, start=1):  # already ordered exactly how we want
+    for i, uid in enumerate(top10, start=1):
         tag = medals[i-1] if i <= 3 else f"#{i}"
         try:
-            user = await client.fetch_user(r["user_id"])
+            user = await client.fetch_user(uid)
             name = user.name
         except discord.NotFound:
-            name = f"User {r['user_id']}"
-        lines.append(f"{tag} **{name}** — **{r['votes']}**")
+            name = f"User {uid}"
+        lines.append(f"{tag} **{name}** — **{counts[uid]}**")
 
-    await inter.response.send_message(embed=brand_embed("Monthly Voting Leaderboard", "\n".join(lines), tone="blue"))
+    await inter.response.send_message(
+        embed=brand_embed("Monthly Voting Leaderboard", "\n".join(lines), tone="blue")
+    )
 
 # /rules — reward rules
 @tree.command(name="rules", description="Official NitroVote rules and eligibility.")
