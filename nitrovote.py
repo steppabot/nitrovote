@@ -1,3 +1,4 @@
+# nitrovote.py
 import os
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
@@ -29,6 +30,57 @@ COLORS = {
 }
 
 MIN_VOTES_TO_WIN = 30
+SQL_TOP3_PREV_MONTH = """
+WITH totals AS (
+  SELECT user_id,
+         COUNT(*)::int AS votes,
+         MAX(voted_at) AS last_vote_at  -- when they reached their final total
+  FROM vote_events
+  WHERE voted_at >= %s AND voted_at < %s
+  GROUP BY user_id
+)
+SELECT user_id, votes, last_vote_at
+FROM totals
+WHERE votes >= %s
+ORDER BY votes DESC, last_vote_at ASC, user_id
+LIMIT 3;
+"""
+
+# ---- Month bounds: previous month in CT, as UTC ----
+def prev_month_ct_bounds_utc(now_ct: datetime | None = None):
+    if now_ct is None:
+        now_ct = datetime.now(CT)
+    first_this = now_ct.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    # start of previous month
+    if first_this.month == 1:
+        start_prev = first_this.replace(year=first_this.year - 1, month=12)
+    else:
+        start_prev = first_this.replace(month=first_this.month - 1)
+    end_prev = first_this  # start of this month
+    return start_prev.astimezone(timezone.utc), end_prev.astimezone(timezone.utc)
+
+# ---- Pick a “main chat” channel without config ----
+def pick_announcement_channel(guild: discord.Guild) -> discord.TextChannel | None:
+    me = guild.me
+    def can_post(ch: discord.abc.GuildChannel):
+        p = ch.permissions_for(me)
+        return getattr(p, "view_channel", False) and getattr(p, "send_messages", False)
+
+    # 1) Prefer common names
+    preferred = {"general","chat","lobby","main","talk","discussion","welcome"}
+    named = [c for c in guild.text_channels if c.name.lower() in preferred and can_post(c) and not c.is_nsfw()]
+    if named:
+        return sorted(named, key=lambda c: (c.category.position if c.category else -1, c.position))[0]
+
+    # 2) System channel (if sendable)
+    if guild.system_channel and can_post(guild.system_channel) and not guild.system_channel.is_nsfw():
+        return guild.system_channel
+
+    # 3) Top-most text channel we can post in (non-NSFW)
+    for c in sorted(guild.text_channels, key=lambda c: (c.category.position if c.category else -1, c.position)):
+        if can_post(c) and not c.is_nsfw():
+            return c
+    return None
 
 # ── timezone helpers ─────────────────────────────────────────────────────────
 CT = ZoneInfo("America/Chicago")
@@ -183,6 +235,57 @@ async def about(inter: discord.Interaction):
     )
     e = brand_embed("About NitroVote", desc, tone="purple")
     await inter.response.send_message(embed=e, ephemeral=False)
+
+
+@tree.command(name="winners", description="(Admin) Post last month's Top 3 winners.")
+@app_commands.describe(channel="Channel to post in (optional)")
+@app_commands.default_permissions(manage_guild=True)
+@app_commands.guild_only()
+async def announce_winners(inter: discord.Interaction, channel: discord.TextChannel | None = None):
+    # runtime permission check (in case defaults were changed)
+    perms = inter.user.guild_permissions
+    if not (perms.manage_guild or perms.administrator):
+        await inter.response.send_message("You need **Manage Server** to run this.", ephemeral=True)
+        return
+
+    start_utc, end_utc = prev_month_ct_bounds_utc()
+    month_label = start_utc.astimezone(CT).strftime("%B %Y")
+
+    # compute winners (global, not per-guild)
+    with get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(SQL_TOP3_PREV_MONTH, (start_utc, end_utc, MIN_VOTES_TO_WIN))
+        winners = cur.fetchall()
+
+    if not winners:
+        await inter.response.send_message(f"No eligible winners for **{month_label}**.", ephemeral=True)
+        return
+
+    medals = ["🥇","🥈","🥉"]
+    lines = [f"{medals[i]} <@{w['user_id']}> — **{w['votes']}** votes"
+             for i, w in enumerate(winners)]
+
+    e = brand_embed(
+        title=f"NitroVote Winners — {month_label}",
+        desc="\n".join(lines),
+        tone="gold"
+    )
+    e.set_footer(text="Top 3 win Nitro • Ties broken by who reached the total first • Central Time")
+
+    target = channel or pick_announcement_channel(inter.guild)
+    if not target:
+        await inter.response.send_message(
+            "I couldn't find a channel I can post in. Please pass a channel like `/announce_winners #general`.",
+            ephemeral=True
+        )
+        return
+
+    try:
+        await target.send(embed=e)  # add view=vote_button_view() if you want a CTA
+        await inter.response.send_message(f"Posted winners in {target.mention}.", ephemeral=False)
+    except discord.Forbidden:
+        await inter.response.send_message(
+            f"I don’t have permission to send messages in {target.mention}.", ephemeral=True
+        )
 
 # ── main ─────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
