@@ -46,30 +46,31 @@ ORDER BY votes DESC, last_vote_at ASC, user_id
 LIMIT 3;
 """
 SQL_TOP10_MONTH = """
-WITH month_rows AS (
-  SELECT
-    id,
-    user_id,
-    voted_at,
-    ROW_NUMBER() OVER (ORDER BY voted_at ASC, id ASC) AS rn  -- EXACTLY your raw query order
+WITH month AS (
+  SELECT id, user_id, voted_at
   FROM vote_events
-  WHERE voted_at >= %s
-    AND voted_at <  %s
+  WHERE voted_at >= %s AND voted_at < %s
 ),
-agg AS (
-  SELECT
-    user_id,
-    COUNT(*)::int AS votes,
-    MIN(rn)       AS first_rn  -- user's first appearance in the raw stream
-  FROM month_rows
+first_event AS (
+  -- EXACTLY your raw query ordering to pick each user's first event
+  SELECT DISTINCT ON (user_id)
+         user_id, voted_at, id
+  FROM month
+  ORDER BY user_id, voted_at ASC, id ASC
+),
+totals AS (
+  SELECT user_id, COUNT(*)::int AS votes
+  FROM month
   GROUP BY user_id
 )
-SELECT user_id, votes
-FROM agg
+SELECT t.user_id, t.votes
+FROM totals t
+JOIN first_event fe USING (user_id)
 ORDER BY
-  votes DESC,        -- most votes first
-  first_rn ASC,      -- on ties, whoever appeared earlier in (voted_at, id)
-  user_id ASC
+  t.votes DESC,     -- most votes first
+  fe.voted_at ASC,  -- tie-break: the user's earliest vote time
+  fe.id ASC,        -- strict fallback if two earliest times are equal
+  t.user_id ASC
 LIMIT 10;
 """
 
@@ -218,7 +219,7 @@ async def voteleaders(inter: discord.Interaction):
 
     medals = ["🥇", "🥈", "🥉"]
     lines = []
-    for i, r in enumerate(rows, start=1):  # already ordered by SQL exactly as required
+    for i, r in enumerate(rows, start=1):  # already ordered exactly how we want
         tag = medals[i-1] if i <= 3 else f"#{i}"
         try:
             user = await client.fetch_user(r["user_id"])
@@ -228,7 +229,6 @@ async def voteleaders(inter: discord.Interaction):
         lines.append(f"{tag} **{name}** — **{r['votes']}**")
 
     await inter.response.send_message(embed=brand_embed("Monthly Voting Leaderboard", "\n".join(lines), tone="blue"))
-
 
 # /rules — reward rules
 @tree.command(name="rules", description="Official NitroVote rules and eligibility.")
