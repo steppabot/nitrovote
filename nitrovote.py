@@ -48,16 +48,16 @@ LIMIT 3;
 SQL_TOP10_MONTH = """
 SELECT
   user_id,
-  COUNT(*)::int AS votes,
-  MIN(voted_at) AS first_vote_at,   -- earliest vote in the window
-  MIN(id)       AS first_vote_id,   -- strict tiebreaker if timestamps collide
-  MAX(voted_at) AS last_vote_at
+  COUNT(*)::int AS votes
 FROM vote_events
 WHERE voted_at >= %s
   AND voted_at <  %s
 GROUP BY user_id
-ORDER BY votes DESC, first_vote_at ASC, first_vote_id ASC, user_id
-LIMIT 10;
+ORDER BY
+  COUNT(*) DESC,       -- highest votes first
+  MIN(voted_at) ASC,   -- earliest vote in the window wins the tie
+  MIN(id) ASC,         -- deterministic backup if timestamps ever collide
+  user_id;
 """
 
 # ---- Month bounds: previous month in CT, as UTC ----
@@ -196,14 +196,6 @@ async def voteleaders(inter: discord.Interaction):
         cur.execute(SQL_TOP10_MONTH, (start_utc, end_utc))
         rows = cur.fetchall() or []
 
-    # Extra safety: re-sort exactly the way we want
-    rows.sort(key=lambda r: (
-        -(r["votes"] or 0),
-         r["first_vote_at"],
-         r.get("first_vote_id") or 0,
-         r["user_id"],
-    ))
-
     if not rows:
         e = brand_embed("Monthly Voting Leaderboard", "No votes recorded this month yet.", tone="blue")
         await inter.response.send_message(embed=e)
@@ -211,16 +203,14 @@ async def voteleaders(inter: discord.Interaction):
 
     medals = ["🥇", "🥈", "🥉"]
     lines = []
-    for i, r in enumerate(rows, start=1):
+    for i, r in enumerate(rows[:10], start=1):
         medal = medals[i-1] if i <= 3 else f"#{i}"
         try:
             user = await client.fetch_user(r["user_id"])
             name = user.name
         except discord.NotFound:
             name = f"User {r['user_id']}"
-
-        first_ct = r["first_vote_at"].astimezone(CT).strftime("%b %d, %I:%M %p")
-        lines.append(f"{medal} **{name}** — **{r['votes']}** _(first vote {first_ct} CT)_")
+        lines.append(f"{medal} **{name}** — **{r['votes']}**")
 
     e = brand_embed("Monthly Voting Leaderboard", "\n".join(lines), tone="blue")
     await inter.response.send_message(embed=e)
