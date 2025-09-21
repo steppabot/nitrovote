@@ -46,23 +46,15 @@ ORDER BY votes DESC, last_vote_at ASC, user_id
 LIMIT 3;
 """
 SQL_TOP10_MONTH = """
-WITH month_rows AS (
-  SELECT id, user_id, voted_at
-  FROM vote_events
-  WHERE voted_at >= %s AND voted_at < %s
-),
-agg AS (
-  SELECT
-    user_id,
-    COUNT(*)::int AS votes,
-    MIN(voted_at) AS first_vote_at,   -- earliest vote this month
-    MIN(id)       AS first_vote_id,   -- strict insertion-order tiebreaker
-    MAX(voted_at) AS last_vote_at     -- when they reached their current total
-  FROM month_rows
-  GROUP BY user_id
-)
-SELECT user_id, votes, first_vote_at, first_vote_id, last_vote_at
-FROM agg
+SELECT
+  user_id,
+  COUNT(*)::int      AS votes,
+  MIN(voted_at)      AS first_vote_at,  -- earliest vote in the window
+  MIN(id)            AS first_vote_id   -- monotonic tiebreaker if times match
+FROM vote_events
+WHERE voted_at >= %s
+  AND voted_at <  %s
+GROUP BY user_id
 ORDER BY votes DESC, first_vote_at ASC, first_vote_id ASC, user_id
 LIMIT 10;
 """
@@ -218,8 +210,19 @@ async def voteleaders(inter: discord.Interaction):
         except discord.NotFound:
             name = f"User {r['user_id']}"
 
-        first_ct = r["first_vote_at"].astimezone(CT).strftime("%b %d, %I:%M %p")
-        lines.append(f"{medal} **{name}** — **{r['votes']}** _(first vote {first_ct} CT)_")
+        # psycopg2 returns a datetime here if voted_at is TIMESTAMPTZ (recommended)
+        fv = r.get("first_vote_at")
+        if fv is not None:
+            try:
+                first_ct = fv.astimezone(CT).strftime("%b %d, %I:%M %p")
+                lines.append(f"{medal} **{name}** — **{r['votes']}** _(first vote {first_ct} CT)_")
+            except Exception:
+                lines.append(f"{medal} **{name}** — **{r['votes']}**")
+        else:
+            # last-ditch fallback; also prints available keys once so you can see what's coming back
+            if rows:
+                print("[voteleaders] columns:", list(rows[0].keys()))
+            lines.append(f"{medal} **{name}** — **{r['votes']}**")
 
     e = brand_embed("Monthly Voting Leaderboard", "\n".join(lines), tone="blue")
     await inter.response.send_message(embed=e)
