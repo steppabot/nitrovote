@@ -219,7 +219,8 @@ async def voteleaders(inter: discord.Interaction):
         first_ct = r["first_vote_at"].astimezone(CT).strftime("%b %d, %I:%M %p")
         lines.append(f"{tag} **{name}** — **{r['votes']}** _(first vote {first_ct} CT)_")
 
-    await inter.response.send_message(embed=brand_embed("Monthly Voting Leaderboard", "\n".join(lines), tone="blue")
+    await inter.response.send_message(embed=brand_embed("Monthly Voting Leaderboard", "\n".join(lines), tone="blue"))
+
 # /rules — reward rules
 @tree.command(name="rules", description="Official NitroVote rules and eligibility.")
 async def rules(inter: discord.Interaction):
