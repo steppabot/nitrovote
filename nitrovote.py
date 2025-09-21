@@ -46,17 +46,29 @@ ORDER BY votes DESC, last_vote_at ASC, user_id
 LIMIT 3;
 """
 SQL_TOP10_MONTH = """
-SELECT
-  user_id,
-  COUNT(*)::int AS votes
-FROM vote_events
-WHERE voted_at >= %s
-  AND voted_at <  %s
-GROUP BY user_id
+WITH month_rows AS (
+  SELECT
+    id,
+    user_id,
+    voted_at,
+    ROW_NUMBER() OVER (ORDER BY voted_at ASC, id ASC) AS rn  -- EXACTLY your raw query order
+  FROM vote_events
+  WHERE voted_at >= %s
+    AND voted_at <  %s
+),
+agg AS (
+  SELECT
+    user_id,
+    COUNT(*)::int AS votes,
+    MIN(rn)       AS first_rn  -- user's first appearance in the raw stream
+  FROM month_rows
+  GROUP BY user_id
+)
+SELECT user_id, votes
+FROM agg
 ORDER BY
-  COUNT(*) DESC,     -- most votes first
-  MIN(voted_at) ASC, -- if tied, whoever voted first
-  MIN(id) ASC,       -- strict fallback if timestamps collide
+  votes DESC,        -- most votes first
+  first_rn ASC,      -- on ties, whoever appeared earlier in (voted_at, id)
   user_id ASC
 LIMIT 10;
 """
@@ -216,6 +228,7 @@ async def voteleaders(inter: discord.Interaction):
         lines.append(f"{tag} **{name}** — **{r['votes']}**")
 
     await inter.response.send_message(embed=brand_embed("Monthly Voting Leaderboard", "\n".join(lines), tone="blue"))
+
 
 # /rules — reward rules
 @tree.command(name="rules", description="Official NitroVote rules and eligibility.")
