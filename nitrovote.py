@@ -224,10 +224,6 @@ async def voteleaders(inter: discord.Interaction):
     ordered_users = sorted(counts.keys(), key=lambda uid: (-counts[uid], first_idx[uid], uid))
     top10 = ordered_users[:10]
 
-    # (Optional: quick sanity log so you can compare to your raw list)
-    for uid in top10:
-        print("[leaders]", uid, "votes=", counts[uid], "first_idx=", first_idx[uid])
-
     # 4) Render the embed in that order
     medals = ["🥇", "🥈", "🥉"]
     lines = []
