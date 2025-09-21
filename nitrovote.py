@@ -228,7 +228,7 @@ async def about(inter: discord.Interaction):
         "**What is NitroVote?**\n"
         "NitroVote is a monthly voting game for **Veil** on top.gg.\n\n"
         "**How to play**\n"
-        f"• Type **`/vote`** in <@{VEIL_BOT_ID}> to open the vote link.\n"
+        f"• Type **`/vote`** on Veil bot to open the vote link.\n"
         "• You can vote **every 12 hours**.\n"
         "• Track your progress with **`/myvotes`** and see standings with **`/voteleaders`**.\n\n"
         "_See **/rules** for eligibility and prize details._"
