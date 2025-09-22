@@ -199,46 +199,36 @@ async def myvotes(inter: discord.Interaction):
 @tree.command(name="voteleaders", description="Show the top 10 voters this month (global).")
 async def voteleaders(inter: discord.Interaction):
     start_utc, end_utc = ct_month_bounds_utc()
-
     with get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
-        # 1) Get the raw stream in the SAME order as your manual query
         cur.execute(SQL_EVENTS_FOR_MONTH, (start_utc, end_utc))
         events = cur.fetchall() or []
 
     if not events:
-        await inter.response.send_message(
-            embed=brand_embed("Monthly Voting Leaderboard", "No votes recorded this month yet.", tone="blue")
-        )
+        await inter.response.send_message(embed=brand_embed("Monthly Voting Leaderboard", "No votes recorded this month yet.", tone="blue"))
         return
 
-    # 2) Build vote counts and each user's first appearance index in the stream
     counts: dict[int, int] = {}
-    first_idx: dict[int, int] = {}
-    for idx, ev in enumerate(events):
+    last_idx: dict[int, int] = {}   # when they reached their *current* total
+    for idx, ev in enumerate(events):      # stream: oldest -> newest
         uid = ev["user_id"]
         counts[uid] = counts.get(uid, 0) + 1
-        if uid not in first_idx:
-            first_idx[uid] = idx  # EXACT tie-break key: order from (voted_at, id)
+        last_idx[uid] = idx                # overwrite each time; ends at their last vote
 
-    # 3) Order users: most votes first, then earliest first_idx, then user_id
-    ordered_users = sorted(counts.keys(), key=lambda uid: (-counts[uid], first_idx[uid], uid))
+    # Sort: more votes first; if tied, whoever *reached that total first* (smaller last_idx)
+    ordered_users = sorted(counts.keys(), key=lambda uid: (-counts[uid], last_idx[uid], uid))
     top10 = ordered_users[:10]
 
-    # 4) Render the embed in that order
-    medals = ["🥇", "🥈", "🥉"]
+    medals = ["🥇","🥈","🥉"]
     lines = []
     for i, uid in enumerate(top10, start=1):
         tag = medals[i-1] if i <= 3 else f"#{i}"
         try:
-            user = await client.fetch_user(uid)
-            name = user.name
+            user = await client.fetch_user(uid); name = user.name
         except discord.NotFound:
             name = f"User {uid}"
         lines.append(f"{tag} **{name}** — **{counts[uid]}**")
 
-    await inter.response.send_message(
-        embed=brand_embed("Monthly Voting Leaderboard", "\n".join(lines), tone="blue")
-    )
+    await inter.response.send_message(embed=brand_embed("Monthly Voting Leaderboard", "\n".join(lines), tone="blue"))
 
 # /rules — reward rules
 @tree.command(name="rules", description="Official NitroVote rules and eligibility.")
