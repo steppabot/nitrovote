@@ -283,7 +283,7 @@ async def announce_winners(inter: discord.Interaction, channel: discord.TextChan
     start_utc, end_utc = prev_month_ct_bounds_utc()
     month_label = start_utc.astimezone(CT).strftime("%B %Y")
 
-    # compute winners (global, not per-guild)
+    # compute winners
     with get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute(SQL_TOP3_PREV_MONTH, (start_utc, end_utc, MIN_VOTES_TO_WIN))
         winners = cur.fetchall()
@@ -303,16 +303,11 @@ async def announce_winners(inter: discord.Interaction, channel: discord.TextChan
     )
     e.set_footer(text="Top 3 win Nitro • Ties broken by who reached the total first • Central Time")
 
-    target = channel or pick_announcement_channel(inter.guild)
-    if not target:
-        await inter.response.send_message(
-            "I couldn't find a channel I can post in. Please pass a channel like `/announce_winners #general`.",
-            ephemeral=True
-        )
-        return
+    # ✅ Always default to the current interaction channel if not provided
+    target = channel or inter.channel
 
     try:
-        await target.send(embed=e)  # add view=vote_button_view() if you want a CTA
+        await target.send(embed=e)
         await inter.response.send_message(f"Posted winners in {target.mention}.", ephemeral=False)
     except discord.Forbidden:
         await inter.response.send_message(
